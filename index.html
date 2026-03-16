@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>My Task Manager</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.5.0/Recharts.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.21.4/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #f8fafc; min-height: 100vh; }
+  input, select, button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f5f9; } ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, LineChart, Line } = Recharts;
+
+const PRIORITIES = [
+  { label: "High", color: "#ef4444", bg: "#fef2f2" },
+  { label: "Medium", color: "#f59e0b", bg: "#fffbeb" },
+  { label: "Low", color: "#22c55e", bg: "#f0fdf4" },
+];
+const CATEGORIES = ["Finance", "Legal", "Research", "Lifestyle", "Other"];
+const CAT_COLORS = {
+  Finance: { color: "#0ea5e9", bg: "#f0f9ff" },
+  Legal: { color: "#8b5cf6", bg: "#f5f3ff" },
+  Research: { color: "#f97316", bg: "#fff7ed" },
+  Lifestyle: { color: "#ec4899", bg: "#fdf2f8" },
+  Other: { color: "#64748b", bg: "#f1f5f9" },
+};
+const TABS = ["Short Term", "Long Term", "Stats"];
+const GH_CONFIG_KEY = "todo_github_config";
+const DAILY_KEY = "todo_daily_completion_v1";
+const getPriority = l => PRIORITIES.find(p => p.label === l) || PRIORITIES[1];
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+function loadLocal(key, fallback) {
+  try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; }
+}
+function saveLocal(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div style={{ flex: 1, minWidth: 110, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "14px 16px", textAlign: "center" }}>
+      <div style={{ fontSize: 26, fontWeight: 800, color: color || "#6366f1" }}>{value}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b", marginTop: 2 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+}
+
+const CustomTooltip = ({ active, payload }) => {
+  if (active && payload?.length)
+    return <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 13 }}><strong>{payload[0].name}</strong>: {payload[0].value}</div>;
+  return null;
+};
+
+function App() {
+  const [tasks, setTasks] = useState([]);
+  const [dailyCompletions, setDailyCompletions] = useState(() => loadLocal(DAILY_KEY, {}));
+  const [tab, setTab] = useState("Short Term");
+  const [filter, setFilter] = useState("All");
+  const [catFilter, setCatFilter] = useState("All");
+  const [title, setTitle] = useState("");
+  const [priority, setPriority] = useState("Medium");
+  const [category, setCategory] = useState("Finance");
+  const [due, setDue] = useState("");
+  const [addingDaily, setAddingDaily] = useState(false);
+  const [dailyTitle, setDailyTitle] = useState("");
+  const [dailyCategory, setDailyCategory] = useState("Finance");
+  const [dailyPriority, setDailyPriority] = useState("High");
+  const [webhookUrl, setWebhookUrl] = useState(() => loadLocal("todo_webhook", ""));
+  const [showWebhook, setShowWebhook] = useState(false);
+  const [monthlyView, setMonthlyView] = useState("overview");
+  const [showSettings, setShowSettings] = useState(false);
+  const [ghToken, setGhToken] = useState(() => loadLocal(GH_CONFIG_KEY, {}).token || "");
+  const [ghRepo, setGhRepo] = useState(() => loadLocal(GH_CONFIG_KEY, {}).repo || "");
+  const [ghStatus, setGhStatus] = useState("idle");
+  const [ghMsg, setGhMsg] = useState("");
+  const [fileSha, setFileSha] = useState(null);
+
+  const ghUser = "ToxicAbility";
+  const ghFile = "tasks.json";
+  const apiBase = `https://api.github.com/repos/${ghUser}/${ghRepo}/contents/${ghFile}`;
+
+  const ghHeaders = useCallback(() => ({
+    "Authorization": `token ${ghToken}`,
+    "Content-Type": "application/json",
+  }), [ghToken]);
+
+  const loadFromGitHub = useCallback(async () => {
+    if (!ghToken || !ghRepo) return;
+    setGhStatus("loading"); setGhMsg("Loading from GitHub…");
+    try {
+      const res = await fetch(apiBase, { headers: ghHeaders() });
+      if (res.status === 404) { setGhStatus("success"); setGhMsg("No data yet — will create on first save."); return; }
+      if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+      const data = await res.json();
+      setFileSha(data.sha);
+      const decoded = JSON.parse(atob(data.content.replace(/\n/g, "")));
+      setTasks(decoded.tasks || []);
+      setGhStatus("success"); setGhMsg("✅ Loaded from GitHub");
+    } catch (e) { setGhStatus("error"); setGhMsg("❌ " + e.message); }
+  }, [apiBase, ghHeaders, ghToken, ghRepo]);
+
+  const saveToGitHub = useCallback(async (newTasks) => {
+    if (!ghToken || !ghRepo) return;
+    setGhStatus("saving"); setGhMsg("Saving…");
+    try {
+      const content = btoa(unescape(encodeURIComponent(JSON.stringify({ tasks: newTasks }, null, 2))));
+      const body = { message: `Update tasks ${todayStr()}`, content, ...(fileSha ? { sha: fileSha } : {}) };
+      const res = await fetch(apiBase, { method: "PUT", headers: ghHeaders(), body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+      const data = await res.json();
+      setFileSha(data.content.sha);
+      setGhStatus("success"); setGhMsg("✅ Saved");
+    } catch (e) { setGhStatus("error"); setGhMsg("❌ " + e.message); }
+  }, [apiBase, ghHeaders, ghToken, ghRepo, fileSha]);
+
+  useEffect(() => { if (ghToken && ghRepo) loadFromGitHub(); else setTasks(loadLocal("todo_manager_v3", [])); }, [ghToken, ghRepo]);
+  useEffect(() => { saveLocal(DAILY_KEY, dailyCompletions); }, [dailyCompletions]);
+  useEffect(() => { saveLocal("todo_webhook", webhookUrl); }, [webhookUrl]);
+  useEffect(() => { saveLocal(GH_CONFIG_KEY, { token: ghToken, repo: ghRepo }); }, [ghToken, ghRepo]);
+
+  const updateTasks = (newTasks) => {
+    setTasks(newTasks);
+    if (ghToken && ghRepo) saveToGitHub(newTasks);
+    else saveLocal("todo_manager_v3", newTasks);
+  };
+
+  const today = todayStr();
+  const dailyTasks = tasks.filter(t => t.daily);
+  const regularTasks = tasks.filter(t => !t.daily);
+  const isDailyDone = id => !!(dailyCompletions[today]?.[id]);
+  const toggleDaily = id => setDailyCompletions(prev => { const d = { ...(prev[today] || {}) }; d[id] = !d[id]; return { ...prev, [today]: d }; });
+  const addDailyTask = () => {
+    if (!dailyTitle.trim()) return;
+    updateTasks([...tasks, { id: Date.now(), title: dailyTitle.trim(), priority: dailyPriority, category: dailyCategory, due: "", done: false, term: "Short Term", daily: true }]);
+    setDailyTitle(""); setAddingDaily(false);
+  };
+  const removeTask = id => updateTasks(tasks.filter(x => x.id !== id));
+  const add = () => {
+    if (!title.trim()) return;
+    updateTasks([...tasks, { id: Date.now(), title: title.trim(), priority, category, due, done: false, term: tab, daily: false }]);
+    setTitle(""); setDue("");
+  };
+  const toggle = id => updateTasks(tasks.map(x => x.id === id ? { ...x, done: !x.done } : x));
+  const isOverdue = (due, done) => !done && due && new Date(due) < new Date().setHours(0, 0, 0, 0);
+
+  const tabTasks = regularTasks.filter(t => t.term === tab);
+  const doneCount = tabTasks.filter(t => t.done).length;
+  const total = tabTasks.length;
+  const pct = total ? Math.round((doneCount / total) * 100) : 0;
+  const dailyDoneToday = dailyTasks.filter(t => isDailyDone(t.id)).length;
+  const dailyPct = dailyTasks.length ? Math.round(dailyDoneToday / dailyTasks.length * 100) : 0;
+
+  const visible = tabTasks
+    .filter(t => filter === "All" ? true : filter === "Active" ? !t.done : t.done)
+    .filter(t => catFilter === "All" ? true : t.category === catFilter)
+    .sort((a, b) => PRIORITIES.findIndex(p => p.label === a.priority) - PRIORITIES.findIndex(p => p.label === b.priority));
+
+  const allTasks = tasks;
+  const totalAll = allTasks.filter(t => !t.daily).length;
+  const doneAll = allTasks.filter(t => !t.daily && t.done).length;
+  const overdueAll = allTasks.filter(t => !t.daily && isOverdue(t.due, t.done)).length;
+  const withDue = allTasks.filter(t => !t.daily && t.due);
+  const onTime = withDue.filter(t => t.done && new Date(t.due) >= new Date().setHours(0,0,0,0)).length;
+  const missedDeadlines = withDue.filter(t => isOverdue(t.due, t.done)).length;
+  const deadlineHitRate = withDue.length ? Math.round((onTime / withDue.length) * 100) : null;
+
+  const statusPie = [{ name: "Completed", value: doneAll }, { name: "Active", value: totalAll - doneAll - overdueAll }, { name: "Overdue", value: overdueAll }].filter(d => d.value > 0);
+  const PIE_COLORS = ["#22c55e", "#6366f1", "#ef4444"];
+  const catBar = CATEGORIES.map(c => ({ name: c, Total: tasks.filter(t => !t.daily && t.category === c).length, Done: tasks.filter(t => !t.daily && t.category === c && t.done).length, Overdue: tasks.filter(t => !t.daily && t.category === c && isOverdue(t.due, t.done)).length }));
+  const priorityBar = PRIORITIES.map(p => ({ name: p.label, Total: tasks.filter(t => !t.daily && t.priority === p.label).length, Done: tasks.filter(t => !t.daily && t.priority === p.label && t.done).length }));
+  const PRIORITY_COLORS = { High: "#ef4444", Medium: "#f59e0b", Low: "#22c55e" };
+
+  const monthlyData = (() => {
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
+      const key = d.toISOString().slice(0, 7);
+      const label = d.toLocaleString("default", { month: "short", year: "2-digit" });
+      const mt = allTasks.filter(t => t.id && new Date(t.id).toISOString().slice(0, 7) === key);
+      months.push({ month: label, Total: mt.filter(t => !t.daily).length, Completed: mt.filter(t => !t.daily && t.done).length, Overdue: mt.filter(t => !t.daily && isOverdue(t.due, t.done)).length, Finance: mt.filter(t => t.category === "Finance").length, Legal: mt.filter(t => t.category === "Legal").length, Research: mt.filter(t => t.category === "Research").length, Lifestyle: mt.filter(t => t.category === "Lifestyle").length, Other: mt.filter(t => t.category === "Other").length, ShortTerm: mt.filter(t => t.term === "Short Term").length, LongTerm: mt.filter(t => t.term === "Long Term").length });
+    }
+    return months;
+  })();
+
+  const incompleteDailyTasks = dailyTasks.filter(t => !isDailyDone(t.id)).map(t => t.title);
+  const webhookPayload = JSON.stringify({ date: today, incomplete_daily_tasks: incompleteDailyTasks, total: dailyTasks.length, done: dailyDoneToday }, null, 2);
+  const inp = { border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 13, background: "#fff", outline: "none" };
+  const syncColor = { idle: "#94a3b8", loading: "#f59e0b", saving: "#f59e0b", success: "#22c55e", error: "#ef4444" }[ghStatus];
+
+  return (
+    <div style={{ maxWidth: 620, margin: "0 auto", padding: "28px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#1e293b" }}>📋 My Tasks</h1>
+        <button onClick={() => setShowSettings(v => !v)}
+          style={{ background: showSettings ? "#eef2ff" : "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#6366f1", display: "flex", alignItems: "center", gap: 5 }}>
+          ⚙️ GitHub <span style={{ color: syncColor, fontSize: 10 }}>{ghToken && ghRepo ? "●" : "○"}</span>
+        </button>
+      </div>
+      <p style={{ color: "#64748b", fontSize: 13, marginBottom: showSettings ? 12 : 18 }}>Organize your work by timeline and category.</p>
+
+      {showSettings && (
+        <div style={{ background: "#fff", border: "1px solid #c7d2fe", borderRadius: 12, padding: 16, marginBottom: 18 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#4338ca", marginBottom: 12 }}>🐙 GitHub Sync — <span style={{ color: "#64748b", fontWeight: 400 }}>ToxicAbility</span></div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Repo name</div>
+              <input value={ghRepo} onChange={e => setGhRepo(e.target.value)} placeholder="my-task-data" style={{ ...inp, width: "100%" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Personal Access Token</div>
+              <input type="password" value={ghToken} onChange={e => setGhToken(e.target.value)} placeholder="ghp_••••••••••••••••" style={{ ...inp, width: "100%" }} />
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={loadFromGitHub} disabled={!ghToken || !ghRepo} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: (!ghToken || !ghRepo) ? 0.5 : 1 }}>🔄 Connect & Load</button>
+              <button onClick={() => saveToGitHub(tasks)} disabled={!ghToken || !ghRepo} style={{ background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: (!ghToken || !ghRepo) ? 0.5 : 1 }}>💾 Force Save</button>
+              {ghMsg && <span style={{ fontSize: 12, color: syncColor }}>{ghMsg}</span>}
+            </div>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8", background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
+            🔒 Your token is stored only in your browser's localStorage — never sent anywhere except GitHub's API directly.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 0, marginBottom: 20, background: "#f1f5f9", borderRadius: 10, padding: 4 }}>
+        {TABS.map(t => (
+          <button key={t} onClick={() => { setTab(t); setFilter("All"); setCatFilter("All"); }}
+            style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "none", fontWeight: 600, fontSize: 13, cursor: "pointer", transition: "all .2s", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#6366f1" : "#64748b", boxShadow: tab === t ? "0 1px 4px rgba(0,0,0,.08)" : "none" }}>
+            {t === "Short Term" ? "⚡ Short Term" : t === "Long Term" ? "🗓 Long Term" : "📊 Stats"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "Stats" ? (
+        <div>
+          {(totalAll === 0 && dailyTasks.length === 0) ? (
+            <div style={{ textAlign: "center", color: "#94a3b8", padding: "60px 0", fontSize: 14 }}>Add some tasks first to see your stats!</div>
+          ) : (<>
+            <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
+              <StatCard label="Total Tasks" value={totalAll} sub="across all tabs" />
+              <StatCard label="Completed" value={doneAll} sub={`${totalAll ? Math.round(doneAll/totalAll*100) : 0}% done`} color="#22c55e" />
+              <StatCard label="Overdue" value={overdueAll} sub="need attention" color="#ef4444" />
+              <StatCard label="Deadline Hit Rate" value={deadlineHitRate !== null ? `${deadlineHitRate}%` : "—"} sub={withDue.length ? `${withDue.length} with due dates` : "no due dates"} color="#0ea5e9" />
+            </div>
+            {dailyTasks.length > 0 && (
+              <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", borderRadius: 12, padding: 16, marginBottom: 16, color: "#fff" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>🔁 Daily Tasks — Today</div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}><span>{dailyDoneToday} of {dailyTasks.length} completed</span><span style={{ fontWeight: 700 }}>{dailyPct}%</span></div>
+                <div style={{ background: "rgba(255,255,255,.3)", borderRadius: 99, height: 8 }}><div style={{ background: "#fff", width: `${dailyPct}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} /></div>
+              </div>
+            )}
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 12 }}>Overall Task Status</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart><Pie data={statusPie} cx="50%" cy="50%" outerRadius={80} innerRadius={45} dataKey="value" label={({ name, percent }) => `${name} ${Math.round(percent*100)}%`} labelLine={false}>{statusPie.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}</Pie><Tooltip content={<CustomTooltip />} /></PieChart>
+              </ResponsiveContainer>
+              <div style={{ display: "flex", justifyContent: "center", gap: 16, marginTop: 6 }}>
+                {statusPie.map((d, i) => <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#475569" }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: PIE_COLORS[i] }} />{d.name}</div>)}
+              </div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 12 }}>Tasks by Category</div>
+              <ResponsiveContainer width="100%" height={180}><BarChart data={catBar} barCategoryGap="30%"><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip content={<CustomTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar dataKey="Total" fill="#c7d2fe" radius={[4,4,0,0]} /><Bar dataKey="Done" fill="#6366f1" radius={[4,4,0,0]} /><Bar dataKey="Overdue" fill="#ef4444" radius={[4,4,0,0]} /></BarChart></ResponsiveContainer>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 12 }}>Completion by Priority</div>
+              <ResponsiveContainer width="100%" height={160}><BarChart data={priorityBar} barCategoryGap="35%"><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip content={<CustomTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar dataKey="Total" radius={[4,4,0,0]}>{priorityBar.map((row, i) => <Cell key={i} fill={PRIORITY_COLORS[row.name] + "55"} />)}</Bar><Bar dataKey="Done" radius={[4,4,0,0]}>{priorityBar.map((row, i) => <Cell key={i} fill={PRIORITY_COLORS[row.name]} />)}</Bar></BarChart></ResponsiveContainer>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>📅 Monthly Overview</div>
+                <div style={{ display: "flex", gap: 5 }}>
+                  {[["overview","Status"],["categories","Categories"],["terms","Term"]].map(([v, l]) => (
+                    <button key={v} onClick={() => setMonthlyView(v)} style={{ padding: "4px 10px", borderRadius: 99, fontSize: 11, fontWeight: 600, cursor: "pointer", border: "1.5px solid", borderColor: monthlyView === v ? "#6366f1" : "#e2e8f0", background: monthlyView === v ? "#eef2ff" : "#fff", color: monthlyView === v ? "#6366f1" : "#64748b" }}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={220}>
+                {monthlyView === "overview" ? (
+                  <BarChart data={monthlyData} barCategoryGap="25%"><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip content={<CustomTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar dataKey="Total" fill="#c7d2fe" radius={[4,4,0,0]} /><Bar dataKey="Completed" fill="#22c55e" radius={[4,4,0,0]} /><Bar dataKey="Overdue" fill="#ef4444" radius={[4,4,0,0]} /></BarChart>
+                ) : monthlyView === "categories" ? (
+                  <BarChart data={monthlyData} barCategoryGap="25%"><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip content={<CustomTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar dataKey="Finance" fill="#0ea5e9" radius={[4,4,0,0]} /><Bar dataKey="Legal" fill="#8b5cf6" radius={[4,4,0,0]} /><Bar dataKey="Research" fill="#f97316" radius={[4,4,0,0]} /><Bar dataKey="Lifestyle" fill="#ec4899" radius={[4,4,0,0]} /><Bar dataKey="Other" fill="#64748b" radius={[4,4,0,0]} /></BarChart>
+                ) : (
+                  <LineChart data={monthlyData}><CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" /><XAxis dataKey="month" tick={{ fontSize: 11 }} /><YAxis allowDecimals={false} tick={{ fontSize: 11 }} /><Tooltip content={<CustomTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="ShortTerm" name="Short Term" stroke="#6366f1" strokeWidth={2} dot={{ r: 4 }} /><Line type="monotone" dataKey="LongTerm" name="Long Term" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 4 }} /></LineChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 12 }}>Deadline Breakdown</div>
+              {withDue.length === 0 ? <div style={{ color: "#94a3b8", fontSize: 13 }}>No tasks with due dates yet.</div> : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {[{ label: "✅ Completed on time", value: onTime, color: "#22c55e" }, { label: "⚠️ Overdue", value: missedDeadlines, color: "#ef4444" }, { label: "🕐 Pending (with due date)", value: withDue.length - onTime - missedDeadlines, color: "#6366f1" }].map(row => (
+                    <div key={row.label}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569", marginBottom: 4 }}><span>{row.label}</span><span style={{ fontWeight: 600, color: row.color }}>{row.value} / {withDue.length}</span></div>
+                      <div style={{ background: "#f1f5f9", borderRadius: 99, height: 6 }}><div style={{ background: row.color, width: `${withDue.length ? Math.round(row.value/withDue.length*100) : 0}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} /></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>)}
+        </div>
+      ) : (
+        <>
+          {tab === "Short Term" && (
+            <div style={{ background: "linear-gradient(135deg,#eef2ff,#f5f3ff)", border: "1px solid #c7d2fe", borderRadius: 12, padding: 15, marginBottom: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div><span style={{ fontSize: 14, fontWeight: 700, color: "#4338ca" }}>🔁 Daily Tasks</span><span style={{ fontSize: 12, color: "#818cf8", marginLeft: 8 }}>Resets every day</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#6366f1" }}>{dailyDoneToday}/{dailyTasks.length} done</span>
+                  <button onClick={() => setShowWebhook(v => !v)} style={{ background: showWebhook ? "#eef2ff" : "none", border: "1px solid #c7d2fe", borderRadius: 7, padding: "3px 8px", fontSize: 12, cursor: "pointer", color: "#6366f1" }}>🔗 Notify</button>
+                  <button onClick={() => setAddingDaily(v => !v)} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 7, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Add</button>
+                </div>
+              </div>
+              {dailyTasks.length > 0 && <div style={{ background: "#c7d2fe", borderRadius: 99, height: 5, marginBottom: 12 }}><div style={{ background: "#6366f1", width: `${dailyPct}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} /></div>}
+              {showWebhook && (
+                <div style={{ background: "#fff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 6 }}>🔗 Webhook URL</div>
+                  <input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} placeholder="https://hook.eu2.make.com/your-webhook-id" style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 7, padding: "7px 10px", fontSize: 12, marginBottom: 8 }} />
+                  <pre style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 7, padding: "8px 10px", fontSize: 11, color: "#475569", overflowX: "auto" }}>{webhookPayload}</pre>
+                  <button onClick={async () => { if (!webhookUrl) return alert("Enter a webhook URL first."); try { await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: webhookPayload }); alert("✅ Sent!"); } catch { alert("❌ Failed. Check URL."); }}} style={{ marginTop: 8, background: "#6366f1", color: "#fff", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Send Test</button>
+                </div>
+              )}
+              {addingDaily && (
+                <div style={{ background: "#fff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                  <input value={dailyTitle} onChange={e => setDailyTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && addDailyTask()} placeholder="Daily task name…" autoFocus style={{ ...inp, width: "100%", marginBottom: 8 }} />
+                  <div style={{ display: "flex", gap: 7 }}>
+                    <select value={dailyPriority} onChange={e => setDailyPriority(e.target.value)} style={{ ...inp, flex: 1 }}>{PRIORITIES.map(p => <option key={p.label}>{p.label}</option>)}</select>
+                    <select value={dailyCategory} onChange={e => setDailyCategory(e.target.value)} style={{ ...inp, flex: 1 }}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+                    <button onClick={addDailyTask} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Save</button>
+                    <button onClick={() => setAddingDaily(false)} style={{ background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer" }}>✕</button>
+                  </div>
+                </div>
+              )}
+              {dailyTasks.length === 0 ? (
+                <div style={{ textAlign: "center", color: "#a5b4fc", fontSize: 13, padding: "12px 0" }}>No daily tasks yet — click + Add to define them.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {dailyTasks.map(task => {
+                    const d = isDailyDone(task.id);
+                    const p = getPriority(task.priority);
+                    const cc = CAT_COLORS[task.category] || { color: "#64748b", bg: "#f8fafc" };
+                    return (
+                      <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 10, background: d ? "#f0fdf4" : "#fff", border: `1px solid ${d ? "#bbf7d0" : "#e0e7ff"}`, borderRadius: 9, padding: "9px 12px", opacity: d ? 0.8 : 1 }}>
+                        <input type="checkbox" checked={d} onChange={() => toggleDaily(task.id)} style={{ width: 16, height: 16, accentColor: "#6366f1", cursor: "pointer" }} />
+                        <div style={{ flex: 1, fontSize: 13, fontWeight: 500, color: "#1e293b", textDecoration: d ? "line-through" : "none" }}>{task.title}</div>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: cc.color, background: cc.bg, padding: "2px 7px", borderRadius: 99 }}>{task.category}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: p.color, background: p.bg, padding: "2px 7px", borderRadius: 99 }}>{task.priority}</span>
+                        <button onClick={() => removeTask(task.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#cbd5e1", fontSize: 14 }}>✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: "13px 16px", marginBottom: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569", marginBottom: 7 }}><span>{doneCount} of {total} tasks completed</span><span style={{ fontWeight: 700, color: "#6366f1" }}>{pct}%</span></div>
+            <div style={{ background: "#e2e8f0", borderRadius: 99, height: 7 }}><div style={{ background: tab === "Short Term" ? "linear-gradient(90deg,#6366f1,#8b5cf6)" : "linear-gradient(90deg,#0ea5e9,#6366f1)", width: `${pct}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} /></div>
+          </div>
+
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 15, marginBottom: 18, boxShadow: "0 1px 4px rgba(0,0,0,.04)" }}>
+            <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder={`New ${tab.toLowerCase()} task…`} style={{ ...inp, width: "100%", marginBottom: 10, fontSize: 14, padding: "9px 12px" }} />
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              <select value={priority} onChange={e => setPriority(e.target.value)} style={{ ...inp, flex: 1, minWidth: 100 }}>{PRIORITIES.map(p => <option key={p.label}>{p.label}</option>)}</select>
+              <select value={category} onChange={e => setCategory(e.target.value)} style={{ ...inp, flex: 1, minWidth: 100 }}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+              <input type="date" value={due} onChange={e => setDue(e.target.value)} style={{ ...inp, flex: 1, minWidth: 120 }} />
+              <button onClick={add} style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>+ Add</button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            {["All","Active","Done"].map(f => <button key={f} onClick={() => setFilter(f)} style={{ padding: "4px 12px", borderRadius: 99, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1.5px solid", borderColor: filter===f?"#6366f1":"#e2e8f0", background: filter===f?"#eef2ff":"#fff", color: filter===f?"#6366f1":"#64748b" }}>{f}</button>)}
+            <div style={{ width: 1, height: 18, background: "#e2e8f0", margin: "0 2px" }} />
+            {["All",...CATEGORIES].map(c => { const cc=CAT_COLORS[c]; const a=catFilter===c; return <button key={c} onClick={()=>setCatFilter(c)} style={{ padding:"4px 12px",borderRadius:99,fontSize:12,fontWeight:500,cursor:"pointer",border:"1.5px solid",borderColor:a&&cc?cc.color:a?"#6366f1":"#e2e8f0",background:a&&cc?cc.bg:a?"#eef2ff":"#fff",color:a&&cc?cc.color:a?"#6366f1":"#64748b" }}>{c}</button>; })}
+            {tabTasks.some(t => t.done) && <button onClick={() => updateTasks(tasks.filter(x => !(x.term===tab&&x.done&&!x.daily)))} style={{ marginLeft:"auto",padding:"4px 11px",borderRadius:99,fontSize:12,cursor:"pointer",border:"1.5px solid #fca5a5",background:"#fff",color:"#ef4444" }}>Clear done</button>}
+          </div>
+
+          {visible.length === 0 ? (
+            <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 14, padding: "40px 0" }}>No tasks here. Add one above!</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {visible.map(task => {
+                const p = getPriority(task.priority);
+                const cc = CAT_COLORS[task.category] || { color: "#64748b", bg: "#f8fafc" };
+                const ov = isOverdue(task.due, task.done);
+                return (
+                  <div key={task.id} style={{ display:"flex",alignItems:"center",gap:11,background:task.done?"#f8fafc":"#fff",border:`1px solid ${ov?"#fca5a5":"#e2e8f0"}`,borderRadius:10,padding:"11px 13px",opacity:task.done?0.65:1,transition:"all .2s" }}>
+                    <input type="checkbox" checked={task.done} onChange={() => toggle(task.id)} style={{ width:16,height:16,accentColor:"#6366f1",cursor:"pointer",flexShrink:0 }} />
+                    <div style={{ flex:1,minWidth:0 }}>
+                      <div style={{ fontSize:14,fontWeight:500,color:"#1e293b",textDecoration:task.done?"line-through":"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{task.title}</div>
+                      {task.due && <div style={{ fontSize:11,color:ov?"#ef4444":"#94a3b8",marginTop:2 }}>{ov?"⚠ ":"📅 "}{task.due}</div>}
+                    </div>
+                    <span style={{ fontSize:11,fontWeight:600,color:cc.color,background:cc.bg,padding:"3px 8px",borderRadius:99,flexShrink:0 }}>{task.category}</span>
+                    <span style={{ fontSize:11,fontWeight:600,color:p.color,background:p.bg,padding:"3px 8px",borderRadius:99,flexShrink:0 }}>{task.priority}</span>
+                    <button onClick={() => removeTask(task.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:15,padding:2 }}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
