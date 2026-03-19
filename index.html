@@ -1,26 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>My Task Manager</title>
-<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
-<script src="https://unpkg.com/recharts@2.5.0/umd/Recharts.js"></script>
-<script src="https://unpkg.com/@babel/standalone@7.21.4/babel.min.js"></script>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #f8fafc; min-height: 100vh; }
-  input, select, button { font-family: inherit; }
-  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f5f9; } ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px; }
-</style>
-</head>
-<body>
-<div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useCallback } = React;
-const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, LineChart, Line } = Recharts;
+import { useState, useEffect, useCallback } from "react";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend, LineChart, Line } from "recharts";
 
 const PRIORITIES = [
   { label: "High", color: "#ef4444", bg: "#fef2f2" },
@@ -55,14 +34,13 @@ function StatCard({ label, value, sub, color }) {
     </div>
   );
 }
-
 const CustomTooltip = ({ active, payload }) => {
   if (active && payload?.length)
     return <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 12px", fontSize: 13 }}><strong>{payload[0].name}</strong>: {payload[0].value}</div>;
   return null;
 };
 
-function App() {
+export default function App() {
   const [tasks, setTasks] = useState([]);
   const [dailyCompletions, setDailyCompletions] = useState(() => loadLocal(DAILY_KEY, {}));
   const [tab, setTab] = useState("Short Term");
@@ -82,7 +60,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [ghToken, setGhToken] = useState(() => loadLocal(GH_CONFIG_KEY, {}).token || "");
   const [ghRepo, setGhRepo] = useState(() => loadLocal(GH_CONFIG_KEY, {}).repo || "");
-  const [ghStatus, setGhStatus] = useState("idle");
+  const [ghStatus, setGhStatus] = useState("idle"); // idle | loading | saving | success | error
   const [ghMsg, setGhMsg] = useState("");
   const [fileSha, setFileSha] = useState(null);
 
@@ -90,6 +68,7 @@ function App() {
   const ghFile = "tasks.json";
   const apiBase = `https://api.github.com/repos/${ghUser}/${ghRepo}/contents/${ghFile}`;
 
+  // ── GitHub helpers ──
   const ghHeaders = useCallback(() => ({
     "Authorization": `token ${ghToken}`,
     "Content-Type": "application/json",
@@ -100,19 +79,24 @@ function App() {
     setGhStatus("loading"); setGhMsg("Loading from GitHub…");
     try {
       const res = await fetch(apiBase, { headers: ghHeaders() });
-      if (res.status === 404) { setGhStatus("success"); setGhMsg("No data yet — will create on first save."); return; }
+      if (res.status === 404) {
+        setGhStatus("success"); setGhMsg("No data yet — will create on first save.");
+        return;
+      }
       if (!res.ok) throw new Error(`GitHub error ${res.status}`);
       const data = await res.json();
       setFileSha(data.sha);
       const decoded = JSON.parse(atob(data.content.replace(/\n/g, "")));
       setTasks(decoded.tasks || []);
       setGhStatus("success"); setGhMsg("✅ Loaded from GitHub");
-    } catch (e) { setGhStatus("error"); setGhMsg("❌ " + e.message); }
+    } catch (e) {
+      setGhStatus("error"); setGhMsg("❌ " + e.message);
+    }
   }, [apiBase, ghHeaders, ghToken, ghRepo]);
 
   const saveToGitHub = useCallback(async (newTasks) => {
     if (!ghToken || !ghRepo) return;
-    setGhStatus("saving"); setGhMsg("Saving…");
+    setGhStatus("saving"); setGhMsg("Saving to GitHub…");
     try {
       const content = btoa(unescape(encodeURIComponent(JSON.stringify({ tasks: newTasks }, null, 2))));
       const body = { message: `Update tasks ${todayStr()}`, content, ...(fileSha ? { sha: fileSha } : {}) };
@@ -120,30 +104,39 @@ function App() {
       if (!res.ok) throw new Error(`GitHub error ${res.status}`);
       const data = await res.json();
       setFileSha(data.content.sha);
-      setGhStatus("success"); setGhMsg("✅ Saved");
-    } catch (e) { setGhStatus("error"); setGhMsg("❌ " + e.message); }
+      setGhStatus("success"); setGhMsg("✅ Saved to GitHub");
+    } catch (e) {
+      setGhStatus("error"); setGhMsg("❌ " + e.message);
+    }
   }, [apiBase, ghHeaders, ghToken, ghRepo, fileSha]);
 
-  useEffect(() => { if (ghToken && ghRepo) loadFromGitHub(); else setTasks(loadLocal("todo_manager_v3", [])); }, [ghToken, ghRepo]);
-  useEffect(() => { saveLocal(DAILY_KEY, dailyCompletions); }, [dailyCompletions]);
-  useEffect(() => { saveLocal("todo_webhook", webhookUrl); }, [webhookUrl]);
-  useEffect(() => { saveLocal(GH_CONFIG_KEY, { token: ghToken, repo: ghRepo }); }, [ghToken, ghRepo]);
+  // Load on mount / config change
+  useEffect(() => {
+    if (ghToken && ghRepo) loadFromGitHub();
+    else setTasks(loadLocal("todo_manager_v3", []));
+  }, [ghToken, ghRepo]);
 
+  // Save tasks
   const updateTasks = (newTasks) => {
     setTasks(newTasks);
     if (ghToken && ghRepo) saveToGitHub(newTasks);
     else saveLocal("todo_manager_v3", newTasks);
   };
 
+  useEffect(() => { saveLocal(DAILY_KEY, dailyCompletions); }, [dailyCompletions]);
+  useEffect(() => { saveLocal("todo_webhook", webhookUrl); }, [webhookUrl]);
+  useEffect(() => { saveLocal(GH_CONFIG_KEY, { token: ghToken, repo: ghRepo }); }, [ghToken, ghRepo]);
+
   const today = todayStr();
   const dailyTasks = tasks.filter(t => t.daily);
   const regularTasks = tasks.filter(t => !t.daily);
   const isDailyDone = id => !!(dailyCompletions[today]?.[id]);
   const toggleDaily = id => setDailyCompletions(prev => { const d = { ...(prev[today] || {}) }; d[id] = !d[id]; return { ...prev, [today]: d }; });
+
   const addDailyTask = () => {
     if (!dailyTitle.trim()) return;
-    updateTasks([...tasks, { id: Date.now(), title: dailyTitle.trim(), priority: dailyPriority, category: dailyCategory, due: "", done: false, term: "Short Term", daily: true }]);
-    setDailyTitle(""); setAddingDaily(false);
+    const next = [...tasks, { id: Date.now(), title: dailyTitle.trim(), priority: dailyPriority, category: dailyCategory, due: "", done: false, term: "Short Term", daily: true }];
+    updateTasks(next); setDailyTitle(""); setAddingDaily(false);
   };
   const removeTask = id => updateTasks(tasks.filter(x => x.id !== id));
   const add = () => {
@@ -155,9 +148,9 @@ function App() {
   const isOverdue = (due, done) => !done && due && new Date(due) < new Date().setHours(0, 0, 0, 0);
 
   const tabTasks = regularTasks.filter(t => t.term === tab);
-  const doneCount = tabTasks.filter(t => t.done).length;
+  const done = tabTasks.filter(t => t.done).length;
   const total = tabTasks.length;
-  const pct = total ? Math.round((doneCount / total) * 100) : 0;
+  const pct = total ? Math.round((done / total) * 100) : 0;
   const dailyDoneToday = dailyTasks.filter(t => isDailyDone(t.id)).length;
   const dailyPct = dailyTasks.length ? Math.round(dailyDoneToday / dailyTasks.length * 100) : 0;
 
@@ -175,7 +168,11 @@ function App() {
   const missedDeadlines = withDue.filter(t => isOverdue(t.due, t.done)).length;
   const deadlineHitRate = withDue.length ? Math.round((onTime / withDue.length) * 100) : null;
 
-  const statusPie = [{ name: "Completed", value: doneAll }, { name: "Active", value: totalAll - doneAll - overdueAll }, { name: "Overdue", value: overdueAll }].filter(d => d.value > 0);
+  const statusPie = [
+    { name: "Completed", value: doneAll },
+    { name: "Active", value: totalAll - doneAll - overdueAll },
+    { name: "Overdue", value: overdueAll },
+  ].filter(d => d.value > 0);
   const PIE_COLORS = ["#22c55e", "#6366f1", "#ef4444"];
   const catBar = CATEGORIES.map(c => ({ name: c, Total: tasks.filter(t => !t.daily && t.category === c).length, Done: tasks.filter(t => !t.daily && t.category === c && t.done).length, Overdue: tasks.filter(t => !t.daily && t.category === c && isOverdue(t.due, t.done)).length }));
   const priorityBar = PRIORITIES.map(p => ({ name: p.label, Total: tasks.filter(t => !t.daily && t.priority === p.label).length, Done: tasks.filter(t => !t.daily && t.priority === p.label && t.done).length }));
@@ -195,44 +192,56 @@ function App() {
 
   const incompleteDailyTasks = dailyTasks.filter(t => !isDailyDone(t.id)).map(t => t.title);
   const webhookPayload = JSON.stringify({ date: today, incomplete_daily_tasks: incompleteDailyTasks, total: dailyTasks.length, done: dailyDoneToday }, null, 2);
-  const inp = { border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 13, background: "#fff", outline: "none" };
+  const inputStyle = { border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 11px", fontSize: 13, background: "#fff", outline: "none" };
+
   const syncColor = { idle: "#94a3b8", loading: "#f59e0b", saving: "#f59e0b", success: "#22c55e", error: "#ef4444" }[ghStatus];
 
   return (
-    <div style={{ maxWidth: 620, margin: "0 auto", padding: "28px 16px" }}>
+    <div style={{ fontFamily: "'Inter',sans-serif", maxWidth: 600, margin: "0 auto", padding: "24px 16px" }}>
+      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#1e293b" }}>📋 My Tasks</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: "#1e293b", margin: 0 }}>📋 My Tasks</h1>
         <button onClick={() => setShowSettings(v => !v)}
           style={{ background: showSettings ? "#eef2ff" : "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#6366f1", display: "flex", alignItems: "center", gap: 5 }}>
-          ⚙️ GitHub <span style={{ color: syncColor, fontSize: 10 }}>{ghToken && ghRepo ? "●" : "○"}</span>
+          ⚙️ GitHub {ghToken && ghRepo ? <span style={{ color: syncColor, fontSize: 10 }}>●</span> : <span style={{ color: "#94a3b8", fontSize: 10 }}>○</span>}
         </button>
       </div>
       <p style={{ color: "#64748b", fontSize: 13, marginBottom: showSettings ? 12 : 18 }}>Organize your work by timeline and category.</p>
 
+      {/* GitHub Settings Panel */}
       {showSettings && (
         <div style={{ background: "#fff", border: "1px solid #c7d2fe", borderRadius: 12, padding: 16, marginBottom: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#4338ca", marginBottom: 12 }}>🐙 GitHub Sync — <span style={{ color: "#64748b", fontWeight: 400 }}>ToxicAbility</span></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div>
-              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Repo name</div>
-              <input value={ghRepo} onChange={e => setGhRepo(e.target.value)} placeholder="my-task-data" style={{ ...inp, width: "100%" }} />
+              <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Repo name (e.g. my-task-data)</div>
+              <input value={ghRepo} onChange={e => setGhRepo(e.target.value)} placeholder="my-task-data"
+                style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} />
             </div>
             <div>
               <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Personal Access Token</div>
-              <input type="password" value={ghToken} onChange={e => setGhToken(e.target.value)} placeholder="ghp_••••••••••••••••" style={{ ...inp, width: "100%" }} />
+              <input type="password" value={ghToken} onChange={e => setGhToken(e.target.value)} placeholder="ghp_••••••••••••••••••••"
+                style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} />
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button onClick={loadFromGitHub} disabled={!ghToken || !ghRepo} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: (!ghToken || !ghRepo) ? 0.5 : 1 }}>🔄 Connect & Load</button>
-              <button onClick={() => saveToGitHub(tasks)} disabled={!ghToken || !ghRepo} style={{ background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: (!ghToken || !ghRepo) ? 0.5 : 1 }}>💾 Force Save</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button onClick={loadFromGitHub} disabled={!ghToken || !ghRepo}
+                style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: (!ghToken || !ghRepo) ? 0.5 : 1 }}>
+                🔄 Connect & Load
+              </button>
+              <button onClick={() => saveToGitHub(tasks)} disabled={!ghToken || !ghRepo}
+                style={{ background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 13, cursor: "pointer", opacity: (!ghToken || !ghRepo) ? 0.5 : 1 }}>
+                💾 Force Save
+              </button>
               {ghMsg && <span style={{ fontSize: 12, color: syncColor }}>{ghMsg}</span>}
             </div>
           </div>
           <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8", background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
-            🔒 Your token is stored only in your browser's localStorage — never sent anywhere except GitHub's API directly.
+            🔒 Your token is stored only in your browser's localStorage — never sent anywhere except GitHub's API. Token is masked above for safety.
           </div>
         </div>
       )}
 
+      {/* Tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: 20, background: "#f1f5f9", borderRadius: 10, padding: 4 }}>
         {TABS.map(t => (
           <button key={t} onClick={() => { setTab(t); setFilter("All"); setCatFilter("All"); }}
@@ -242,6 +251,7 @@ function App() {
         ))}
       </div>
 
+      {/* ── STATS TAB ── */}
       {tab === "Stats" ? (
         <div>
           {(totalAll === 0 && dailyTasks.length === 0) ? (
@@ -251,7 +261,7 @@ function App() {
               <StatCard label="Total Tasks" value={totalAll} sub="across all tabs" />
               <StatCard label="Completed" value={doneAll} sub={`${totalAll ? Math.round(doneAll/totalAll*100) : 0}% done`} color="#22c55e" />
               <StatCard label="Overdue" value={overdueAll} sub="need attention" color="#ef4444" />
-              <StatCard label="Deadline Hit Rate" value={deadlineHitRate !== null ? `${deadlineHitRate}%` : "—"} sub={withDue.length ? `${withDue.length} with due dates` : "no due dates"} color="#0ea5e9" />
+              <StatCard label="Deadline Hit Rate" value={deadlineHitRate !== null ? `${deadlineHitRate}%` : "—"} sub={withDue.length ? `${withDue.length} with due dates` : "no due dates set"} color="#0ea5e9" />
             </div>
             {dailyTasks.length > 0 && (
               <div style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", borderRadius: 12, padding: 16, marginBottom: 16, color: "#fff" }}>
@@ -326,18 +336,18 @@ function App() {
               {dailyTasks.length > 0 && <div style={{ background: "#c7d2fe", borderRadius: 99, height: 5, marginBottom: 12 }}><div style={{ background: "#6366f1", width: `${dailyPct}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} /></div>}
               {showWebhook && (
                 <div style={{ background: "#fff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 12, marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 6 }}>🔗 Webhook URL</div>
-                  <input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} placeholder="https://hook.eu2.make.com/your-webhook-id" style={{ width: "100%", border: "1px solid #e2e8f0", borderRadius: 7, padding: "7px 10px", fontSize: 12, marginBottom: 8 }} />
-                  <pre style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 7, padding: "8px 10px", fontSize: 11, color: "#475569", overflowX: "auto" }}>{webhookPayload}</pre>
-                  <button onClick={async () => { if (!webhookUrl) return alert("Enter a webhook URL first."); try { await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: webhookPayload }); alert("✅ Sent!"); } catch { alert("❌ Failed. Check URL."); }}} style={{ marginTop: 8, background: "#6366f1", color: "#fff", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Send Test</button>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#4338ca", marginBottom: 6 }}>🔗 Make.com / Zapier Webhook URL</div>
+                  <input value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)} placeholder="https://hook.eu2.make.com/your-webhook-id" style={{ width: "100%", boxSizing: "border-box", border: "1px solid #e2e8f0", borderRadius: 7, padding: "7px 10px", fontSize: 12, marginBottom: 8 }} />
+                  <pre style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 7, padding: "8px 10px", fontSize: 11, color: "#475569", overflowX: "auto", margin: 0 }}>{webhookPayload}</pre>
+                  <button onClick={async () => { if (!webhookUrl) return alert("Please enter a webhook URL first."); try { await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: webhookPayload }); alert("✅ Test payload sent!"); } catch { alert("❌ Failed to send. Check your URL."); } }} style={{ marginTop: 8, background: "#6366f1", color: "#fff", border: "none", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Send Test Payload</button>
                 </div>
               )}
               {addingDaily && (
                 <div style={{ background: "#fff", border: "1px solid #c7d2fe", borderRadius: 10, padding: 12, marginBottom: 10 }}>
-                  <input value={dailyTitle} onChange={e => setDailyTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && addDailyTask()} placeholder="Daily task name…" autoFocus style={{ ...inp, width: "100%", marginBottom: 8 }} />
+                  <input value={dailyTitle} onChange={e => setDailyTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && addDailyTask()} placeholder="Daily task name…" autoFocus style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 8, fontSize: 13 }} />
                   <div style={{ display: "flex", gap: 7 }}>
-                    <select value={dailyPriority} onChange={e => setDailyPriority(e.target.value)} style={{ ...inp, flex: 1 }}>{PRIORITIES.map(p => <option key={p.label}>{p.label}</option>)}</select>
-                    <select value={dailyCategory} onChange={e => setDailyCategory(e.target.value)} style={{ ...inp, flex: 1 }}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+                    <select value={dailyPriority} onChange={e => setDailyPriority(e.target.value)} style={{ ...inputStyle, flex: 1 }}>{PRIORITIES.map(p => <option key={p.label}>{p.label}</option>)}</select>
+                    <select value={dailyCategory} onChange={e => setDailyCategory(e.target.value)} style={{ ...inputStyle, flex: 1 }}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
                     <button onClick={addDailyTask} style={{ background: "#6366f1", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Save</button>
                     <button onClick={() => setAddingDaily(false)} style={{ background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer" }}>✕</button>
                   </div>
@@ -348,16 +358,16 @@ function App() {
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                   {dailyTasks.map(task => {
-                    const d = isDailyDone(task.id);
+                    const done = isDailyDone(task.id);
                     const p = getPriority(task.priority);
                     const cc = CAT_COLORS[task.category] || { color: "#64748b", bg: "#f8fafc" };
                     return (
-                      <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 10, background: d ? "#f0fdf4" : "#fff", border: `1px solid ${d ? "#bbf7d0" : "#e0e7ff"}`, borderRadius: 9, padding: "9px 12px", opacity: d ? 0.8 : 1 }}>
-                        <input type="checkbox" checked={d} onChange={() => toggleDaily(task.id)} style={{ width: 16, height: 16, accentColor: "#6366f1", cursor: "pointer" }} />
-                        <div style={{ flex: 1, fontSize: 13, fontWeight: 500, color: "#1e293b", textDecoration: d ? "line-through" : "none" }}>{task.title}</div>
+                      <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 10, background: done ? "#f0fdf4" : "#fff", border: `1px solid ${done ? "#bbf7d0" : "#e0e7ff"}`, borderRadius: 9, padding: "9px 12px", opacity: done ? 0.8 : 1, transition: "all .2s" }}>
+                        <input type="checkbox" checked={done} onChange={() => toggleDaily(task.id)} style={{ width: 16, height: 16, accentColor: "#6366f1", cursor: "pointer", flexShrink: 0 }} />
+                        <div style={{ flex: 1, fontSize: 13, fontWeight: 500, color: "#1e293b", textDecoration: done ? "line-through" : "none" }}>{task.title}</div>
                         <span style={{ fontSize: 11, fontWeight: 600, color: cc.color, background: cc.bg, padding: "2px 7px", borderRadius: 99 }}>{task.category}</span>
                         <span style={{ fontSize: 11, fontWeight: 600, color: p.color, background: p.bg, padding: "2px 7px", borderRadius: 99 }}>{task.priority}</span>
-                        <button onClick={() => removeTask(task.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#cbd5e1", fontSize: 14 }}>✕</button>
+                        <button onClick={() => removeTask(task.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#cbd5e1", fontSize: 14, padding: 2 }}>✕</button>
                       </div>
                     );
                   })}
@@ -367,25 +377,33 @@ function App() {
           )}
 
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: "13px 16px", marginBottom: 18 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569", marginBottom: 7 }}><span>{doneCount} of {total} tasks completed</span><span style={{ fontWeight: 700, color: "#6366f1" }}>{pct}%</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: "#475569", marginBottom: 7 }}>
+              <span>{done} of {total} tasks completed</span>
+              <span style={{ fontWeight: 700, color: "#6366f1" }}>{pct}%</span>
+            </div>
             <div style={{ background: "#e2e8f0", borderRadius: 99, height: 7 }}><div style={{ background: tab === "Short Term" ? "linear-gradient(90deg,#6366f1,#8b5cf6)" : "linear-gradient(90deg,#0ea5e9,#6366f1)", width: `${pct}%`, height: "100%", borderRadius: 99, transition: "width .4s" }} /></div>
           </div>
 
           <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 15, marginBottom: 18, boxShadow: "0 1px 4px rgba(0,0,0,.04)" }}>
-            <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder={`New ${tab.toLowerCase()} task…`} style={{ ...inp, width: "100%", marginBottom: 10, fontSize: 14, padding: "9px 12px" }} />
+            <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} placeholder={`New ${tab.toLowerCase()} task…`} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 10, fontSize: 14, padding: "9px 12px" }} />
             <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-              <select value={priority} onChange={e => setPriority(e.target.value)} style={{ ...inp, flex: 1, minWidth: 100 }}>{PRIORITIES.map(p => <option key={p.label}>{p.label}</option>)}</select>
-              <select value={category} onChange={e => setCategory(e.target.value)} style={{ ...inp, flex: 1, minWidth: 100 }}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
-              <input type="date" value={due} onChange={e => setDue(e.target.value)} style={{ ...inp, flex: 1, minWidth: 120 }} />
-              <button onClick={add} style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>+ Add</button>
+              <select value={priority} onChange={e => setPriority(e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 100 }}>{PRIORITIES.map(p => <option key={p.label}>{p.label}</option>)}</select>
+              <select value={category} onChange={e => setCategory(e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 100 }}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
+              <input type="date" value={due} onChange={e => setDue(e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 120 }} />
+              <button onClick={add} style={{ flex: "0 0 auto", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, fontSize: 14, cursor: "pointer" }}>+ Add</button>
             </div>
           </div>
 
           <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-            {["All","Active","Done"].map(f => <button key={f} onClick={() => setFilter(f)} style={{ padding: "4px 12px", borderRadius: 99, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1.5px solid", borderColor: filter===f?"#6366f1":"#e2e8f0", background: filter===f?"#eef2ff":"#fff", color: filter===f?"#6366f1":"#64748b" }}>{f}</button>)}
+            {["All", "Active", "Done"].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{ padding: "4px 12px", borderRadius: 99, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1.5px solid", borderColor: filter === f ? "#6366f1" : "#e2e8f0", background: filter === f ? "#eef2ff" : "#fff", color: filter === f ? "#6366f1" : "#64748b" }}>{f}</button>
+            ))}
             <div style={{ width: 1, height: 18, background: "#e2e8f0", margin: "0 2px" }} />
-            {["All",...CATEGORIES].map(c => { const cc=CAT_COLORS[c]; const a=catFilter===c; return <button key={c} onClick={()=>setCatFilter(c)} style={{ padding:"4px 12px",borderRadius:99,fontSize:12,fontWeight:500,cursor:"pointer",border:"1.5px solid",borderColor:a&&cc?cc.color:a?"#6366f1":"#e2e8f0",background:a&&cc?cc.bg:a?"#eef2ff":"#fff",color:a&&cc?cc.color:a?"#6366f1":"#64748b" }}>{c}</button>; })}
-            {tabTasks.some(t => t.done) && <button onClick={() => updateTasks(tasks.filter(x => !(x.term===tab&&x.done&&!x.daily)))} style={{ marginLeft:"auto",padding:"4px 11px",borderRadius:99,fontSize:12,cursor:"pointer",border:"1.5px solid #fca5a5",background:"#fff",color:"#ef4444" }}>Clear done</button>}
+            {["All", ...CATEGORIES].map(c => {
+              const cc = CAT_COLORS[c]; const active = catFilter === c;
+              return <button key={c} onClick={() => setCatFilter(c)} style={{ padding: "4px 12px", borderRadius: 99, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "1.5px solid", borderColor: active && cc ? cc.color : active ? "#6366f1" : "#e2e8f0", background: active && cc ? cc.bg : active ? "#eef2ff" : "#fff", color: active && cc ? cc.color : active ? "#6366f1" : "#64748b" }}>{c}</button>;
+            })}
+            {tabTasks.some(t => t.done) && <button onClick={() => updateTasks(tasks.filter(x => !(x.term === tab && x.done && !x.daily)))} style={{ marginLeft: "auto", padding: "4px 11px", borderRadius: 99, fontSize: 12, cursor: "pointer", border: "1.5px solid #fca5a5", background: "#fff", color: "#ef4444" }}>Clear done</button>}
           </div>
 
           {visible.length === 0 ? (
@@ -395,17 +413,17 @@ function App() {
               {visible.map(task => {
                 const p = getPriority(task.priority);
                 const cc = CAT_COLORS[task.category] || { color: "#64748b", bg: "#f8fafc" };
-                const ov = isOverdue(task.due, task.done);
+                const overdue = isOverdue(task.due, task.done);
                 return (
-                  <div key={task.id} style={{ display:"flex",alignItems:"center",gap:11,background:task.done?"#f8fafc":"#fff",border:`1px solid ${ov?"#fca5a5":"#e2e8f0"}`,borderRadius:10,padding:"11px 13px",opacity:task.done?0.65:1,transition:"all .2s" }}>
-                    <input type="checkbox" checked={task.done} onChange={() => toggle(task.id)} style={{ width:16,height:16,accentColor:"#6366f1",cursor:"pointer",flexShrink:0 }} />
-                    <div style={{ flex:1,minWidth:0 }}>
-                      <div style={{ fontSize:14,fontWeight:500,color:"#1e293b",textDecoration:task.done?"line-through":"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{task.title}</div>
-                      {task.due && <div style={{ fontSize:11,color:ov?"#ef4444":"#94a3b8",marginTop:2 }}>{ov?"⚠ ":"📅 "}{task.due}</div>}
+                  <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 11, background: task.done ? "#f8fafc" : "#fff", border: `1px solid ${overdue ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "11px 13px", opacity: task.done ? 0.65 : 1, transition: "all .2s" }}>
+                    <input type="checkbox" checked={task.done} onChange={() => toggle(task.id)} style={{ width: 16, height: 16, accentColor: "#6366f1", cursor: "pointer", flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 500, color: "#1e293b", textDecoration: task.done ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{task.title}</div>
+                      {task.due && <div style={{ fontSize: 11, color: overdue ? "#ef4444" : "#94a3b8", marginTop: 2 }}>{overdue ? "⚠ " : "📅 "}{task.due}</div>}
                     </div>
-                    <span style={{ fontSize:11,fontWeight:600,color:cc.color,background:cc.bg,padding:"3px 8px",borderRadius:99,flexShrink:0 }}>{task.category}</span>
-                    <span style={{ fontSize:11,fontWeight:600,color:p.color,background:p.bg,padding:"3px 8px",borderRadius:99,flexShrink:0 }}>{task.priority}</span>
-                    <button onClick={() => removeTask(task.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"#cbd5e1",fontSize:15,padding:2 }}>✕</button>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: cc.color, background: cc.bg, padding: "3px 8px", borderRadius: 99, flexShrink: 0 }}>{task.category}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: p.color, background: p.bg, padding: "3px 8px", borderRadius: 99, flexShrink: 0 }}>{task.priority}</span>
+                    <button onClick={() => removeTask(task.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#cbd5e1", fontSize: 15, padding: 2, lineHeight: 1 }}>✕</button>
                   </div>
                 );
               })}
@@ -416,8 +434,3 @@ function App() {
     </div>
   );
 }
-
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
-</script>
-</body>
-</html>
